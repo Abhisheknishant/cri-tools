@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	nginxContainerImage string = "nginx:1.18"
+	nginxContainerImage string = "nginx"
 	localhost           string = "localhost/"
 	noNewPrivsImage     string = "gcr.io/kubernetes-e2e-test-images/nonewprivs:1.1"
 )
