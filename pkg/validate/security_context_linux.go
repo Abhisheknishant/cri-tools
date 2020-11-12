@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/kubernetes-sigs/cri-tools/pkg/framework"
-	"github.com/pkg/errors"
 	internalapi "k8s.io/kubernetes/pkg/kubelet/apis/cri"
 	runtimeapi "k8s.io/kubernetes/pkg/kubelet/apis/cri/runtime/v1alpha2"
 
@@ -94,7 +93,7 @@ var _ = framework.KubeDescribe("Security Context", func() {
 			}, time.Minute, time.Second*4).Should(Equal(runtimeapi.ContainerState_CONTAINER_RUNNING))
 
 			By("get nginx container pid")
-			command := []string{"sh", "-c", "while [ ! -f /var/run/nginx.pid ]; do sleep 1; done", "&&", "cat", "/var/run/nginx.pid"}
+			command := []string{"cat", "/var/run/nginx.pid"}
 			output := execSyncContainer(rc, containerID, command)
 			nginxPid := strings.TrimSpace(string(output))
 			framework.Logf("Nginx's pid is %q", nginxPid)
@@ -212,7 +211,6 @@ var _ = framework.KubeDescribe("Security Context", func() {
 
 			By("get nginx container pid")
 			command := []string{"cat", "/proc/1/cmdline"}
-			time.Sleep(time.Second) // waits for nginx to be up-and-running
 			o := execSyncContainer(rc, containerID, command)
 			Expect(o).ToNot(ContainSubstring("master process"))
 		})
@@ -237,8 +235,9 @@ var _ = framework.KubeDescribe("Security Context", func() {
 			}, time.Minute, time.Second*4).Should(Equal(runtimeapi.ContainerState_CONTAINER_RUNNING))
 
 			By("get nginx container pid")
-			command := []string{"sh", "-c", `while ! cat /proc/1/cmdline | grep "master process"; do sleep 1; done`}
-			execSyncContainer(rc, containerID, command)
+			command := []string{"cat", "/proc/1/cmdline"}
+			o := execSyncContainer(rc, containerID, command)
+			Expect(o).To(ContainSubstring("master process"))
 		})
 
 		It("runtime should support HostNetwork is true", func() {
@@ -477,64 +476,6 @@ var _ = framework.KubeDescribe("Security Context", func() {
 
 			checkNetworkManagement(rc, containerID, false)
 		})
-
-		It("runtime should support MaskedPaths", func() {
-			By("create pod")
-			podID, podConfig = framework.CreatePodSandboxForContainer(rc)
-
-			By("create container with MaskedPaths")
-			containerName := "container-with-maskedpaths" + framework.NewUUID()
-			containerConfig := &runtimeapi.ContainerConfig{
-				Metadata: framework.BuildContainerMetadata(containerName, framework.DefaultAttempt),
-				Image:    &runtimeapi.ImageSpec{Image: framework.DefaultContainerImage},
-				Command:  pauseCmd,
-				Linux: &runtimeapi.LinuxContainerConfig{
-					SecurityContext: &runtimeapi.LinuxContainerSecurityContext{
-						MaskedPaths: []string{"/bin/ls"},
-					},
-				},
-			}
-
-			containerID := framework.CreateContainer(rc, ic, containerConfig, podID, podConfig)
-			startContainer(rc, containerID)
-			Eventually(func() runtimeapi.ContainerState {
-				return getContainerStatus(rc, containerID).State
-			}, time.Minute, time.Second*4).Should(Equal(runtimeapi.ContainerState_CONTAINER_RUNNING))
-
-			cmd := []string{"/bin/sh", "-c", "ls"}
-			_, stderr, err := rc.ExecSync(containerID, cmd, time.Duration(defaultExecSyncTimeout)*time.Second)
-			Expect(err).To(HaveOccurred())
-			Expect(string(stderr)).To(Equal("/bin/sh: ls: Permission denied\n"))
-		})
-
-		It("runtime should support ReadonlyPaths", func() {
-			By("create pod")
-			podID, podConfig = framework.CreatePodSandboxForContainer(rc)
-
-			By("create container with ReadonlyPaths")
-			containerName := "container-with-readonlypaths" + framework.NewUUID()
-			containerConfig := &runtimeapi.ContainerConfig{
-				Metadata: framework.BuildContainerMetadata(containerName, framework.DefaultAttempt),
-				Image:    &runtimeapi.ImageSpec{Image: framework.DefaultContainerImage},
-				Command:  pauseCmd,
-				Linux: &runtimeapi.LinuxContainerConfig{
-					SecurityContext: &runtimeapi.LinuxContainerSecurityContext{
-						ReadonlyPaths: []string{"/tmp"},
-					},
-				},
-			}
-
-			containerID := framework.CreateContainer(rc, ic, containerConfig, podID, podConfig)
-			startContainer(rc, containerID)
-			Eventually(func() runtimeapi.ContainerState {
-				return getContainerStatus(rc, containerID).State
-			}, time.Minute, time.Second*4).Should(Equal(runtimeapi.ContainerState_CONTAINER_RUNNING))
-
-			cmd := []string{"touch", "/tmp/test"}
-			_, stderr, err := rc.ExecSync(containerID, cmd, time.Duration(defaultExecSyncTimeout)*time.Second)
-			Expect(err).To(HaveOccurred())
-			Expect(string(stderr)).To(Equal("touch: /tmp/test: Read-only file system\n"))
-		})
 	})
 
 	// TODO(random-liu): We should set apparmor to unconfined in seccomp test to prevent
@@ -603,6 +544,9 @@ var _ = framework.KubeDescribe("Security Context", func() {
 			podID, containerID = seccompTestContainer(rc, ic, localhost+blockchmodProfilePath)
 
 			By("verify seccomp profile")
+			fmt.Println("..............values...............")
+			fmt.Println("%v\n", containerID)
+			fmt.Println("%v\n",rc)
 			verifySeccomp(rc, containerID, []string{"chmod", "400", "/"}, true, "Operation not permitted") // seccomp denied
 		})
 
@@ -1053,7 +997,7 @@ func createAndCheckHostNetwork(rc internalapi.RuntimeService, ic internalapi.Ima
 func createSeccompProfileDir() (string, error) {
 	hostPath, err := ioutil.TempDir("", "seccomp-tests")
 	if err != nil {
-		return "", errors.Wrapf(err, "create tempdir %q", hostPath)
+		return "", fmt.Errorf("failed to create tempdir %q: %v", hostPath, err)
 	}
 	return hostPath, nil
 }
@@ -1063,7 +1007,7 @@ func createSeccompProfile(profileContents string, profileName string, hostPath s
 	profilePath := filepath.Join(hostPath, profileName)
 	err := ioutil.WriteFile(profilePath, []byte(profileContents), 0644)
 	if err != nil {
-		return "", errors.Wrapf(err, "create %s", profilePath)
+		return "", fmt.Errorf("failed to create %s: %v", profilePath, err)
 	}
 	return profilePath, nil
 }
