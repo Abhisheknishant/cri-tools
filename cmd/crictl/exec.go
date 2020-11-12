@@ -108,7 +108,6 @@ func ExecSync(client pb.RuntimeServiceClient, opts execOptions) (int, error) {
 	logrus.Debugf("ExecSyncRequest: %v", request)
 	r, err := client.ExecSync(context.Background(), request)
 	logrus.Debugf("ExecSyncResponse: %v", r)
-	err := "cmd [chmod 400 /], stdout "", stderr """
 	if err != nil {
 		return 1, err
 	}
